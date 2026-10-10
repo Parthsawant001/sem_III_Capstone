@@ -17,6 +17,12 @@ Core DSA Concepts Implemented:
 - DSA Inspector: Detailed view of Adjacency List and Graph Theory metrics (|V|, |E|, density).
 """
 import sys
+import os
+import ast
+import pprint
+import time
+import datetime
+import shutil
 import math
 import heapq
 from collections import deque
@@ -884,6 +890,633 @@ class DSAInspectorDialog(tk.Toplevel):
 
 
 # ==============================================================================
+# DRAFTS SYSTEM: STORAGE, THUMBNAIL RASTERIZER & DIALOG
+# ==============================================================================
+DRAFTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drafts")
+DRAFTS_FILE = os.path.join(DRAFTS_DIR, "drafts_data.py")
+MAX_DRAFTS = 10
+
+
+def generate_draft_thumbnail(nodes, edges, out_path, w=260, h=150):
+    """
+    Pure Python rasterizer that renders a thumbnail image of the graph
+    and exports it as a PNG image file.
+    """
+    if not nodes:
+        return False
+
+    pad = 22
+    xs = [n["x"] for n in nodes]
+    ys = [n["y"] for n in nodes]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    span_x = max(1.0, max_x - min_x)
+    span_y = max(1.0, max_y - min_y)
+    scale = min((w - 2 * pad) / span_x, (h - 2 * pad) / span_y)
+    scale = min(scale, 1.2)  # Cap scale to avoid over-stretching small graphs
+    off_x = pad + (w - 2 * pad - span_x * scale) / 2.0 - min_x * scale
+    off_y = pad + (h - 2 * pad - span_y * scale) / 2.0 - min_y * scale
+
+    buf = bytearray([13, 19, 34] * (w * h))  # Midnight navy #0D1322
+
+    def put_pixel(x, y, r, g, b):
+        if 0 <= x < w and 0 <= y < h:
+            i = (y * w + x) * 3
+            buf[i] = r
+            buf[i + 1] = g
+            buf[i + 2] = b
+
+    # Outer border #374151
+    for x in range(w):
+        put_pixel(x, 0, 55, 65, 81)
+        put_pixel(x, h - 1, 55, 65, 81)
+    for y in range(h):
+        put_pixel(0, y, 55, 65, 81)
+        put_pixel(w - 1, y, 55, 65, 81)
+
+    def draw_thick_line(x0, y0, x1, y1, r, g, b, thickness=2):
+        dx = abs(x1 - x0)
+        dy = -abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx + dy
+        while True:
+            for tx in range(-thickness // 2, thickness // 2 + 1):
+                for ty in range(-thickness // 2, thickness // 2 + 1):
+                    put_pixel(x0 + tx, y0 + ty, r, g, b)
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 >= dy:
+                err += dy
+                x0 += sx
+            if e2 <= dx:
+                err += dx
+                y0 += sy
+
+    node_map = {n["id"]: n for n in nodes}
+    for e in edges:
+        u = node_map.get(e["u_id"])
+        v = node_map.get(e["v_id"])
+        if u and v:
+            ux = int(u["x"] * scale + off_x)
+            uy = int(u["y"] * scale + off_y)
+            vx = int(v["x"] * scale + off_x)
+            vy = int(v["y"] * scale + off_y)
+            draw_thick_line(ux, uy, vx, vy, 71, 85, 105, thickness=2)
+
+    rad = 8
+    for n in nodes:
+        cx = int(n["x"] * scale + off_x)
+        cy = int(n["y"] * scale + off_y)
+        if n.get("is_start"):
+            fill_col = (16, 185, 129)   # Emerald
+        elif n.get("is_goal"):
+            fill_col = (239, 68, 68)    # Crimson
+        elif n.get("is_obstacle"):
+            fill_col = (100, 116, 139)  # Dim Slate
+        else:
+            fill_col = (56, 189, 248)   # Sky Blue
+
+        for dy in range(-rad, rad + 1):
+            for dx in range(-rad, rad + 1):
+                d2 = dx * dx + dy * dy
+                if d2 <= rad * rad:
+                    if d2 >= (rad - 1) * (rad - 1):
+                        put_pixel(cx + dx, cy + dy, 241, 245, 249)
+                    else:
+                        put_pixel(cx + dx, cy + dy, *fill_col)
+
+    ppm_path = out_path + ".ppm"
+    try:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(ppm_path, "wb") as f:
+            f.write(f"P6\n{w} {h}\n255\n".encode("ascii") + buf)
+
+        # Convert to PNG using PhotoImage
+        img = tk.PhotoImage(file=ppm_path)
+        img.write(out_path, format="png")
+        if os.path.exists(ppm_path):
+            os.remove(ppm_path)
+        return True
+    except Exception:
+        # Fallback to PPM
+        if os.path.exists(ppm_path):
+            try:
+                if not os.path.exists(out_path):
+                    shutil.copyfile(ppm_path, out_path)
+                os.remove(ppm_path)
+            except Exception:
+                pass
+        return False
+
+
+class DraftManager:
+    """
+    Manages persistent storage of graph drafts across app restarts.
+    Stores up to the last 10 drafts in a pure Python file with preview images.
+    """
+    def __init__(self, drafts_dir=None):
+        self.drafts_dir = drafts_dir if drafts_dir is not None else DRAFTS_DIR
+        self.drafts_file = os.path.join(self.drafts_dir, "drafts_data.py")
+        self.max_drafts = MAX_DRAFTS
+        self.drafts = []
+        os.makedirs(self.drafts_dir, exist_ok=True)
+        self.load_drafts()
+
+    def load_drafts(self):
+        if os.path.exists(self.drafts_file):
+            try:
+                with open(self.drafts_file, "r", encoding="utf-8") as f:
+                    code_text = f.read()
+                tree = ast.parse(code_text)
+                for stmt in tree.body:
+                    if isinstance(stmt, ast.Assign):
+                        for target in stmt.targets:
+                            if isinstance(target, ast.Name) and target.id == "DRAFTS":
+                                val = ast.literal_eval(stmt.value)
+                                if isinstance(val, list):
+                                    self.drafts = val[:self.max_drafts]
+                                    return self.drafts
+                self.drafts = []
+            except Exception:
+                self.drafts = []
+        else:
+            self.drafts = []
+        return self.drafts
+
+    def save_to_disk(self):
+        try:
+            os.makedirs(self.drafts_dir, exist_ok=True)
+            formatted_data = pprint.pformat(self.drafts, indent=4, width=100)
+            content = (
+                '"""\n'
+                'Persistent Graph Drafts Storage (Pure Python).\n'
+                'Automatically maintained by the Pathfinding Visualizer.\n'
+                '"""\n\n'
+                f'DRAFTS = {formatted_data}\n'
+            )
+            with open(self.drafts_file, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            print(f"[Error saving drafts to Python file]: {e}")
+
+    def get_drafts(self):
+        return self.drafts
+
+    def get_next_draft_number(self):
+        existing_nums = []
+        for d in self.drafts:
+            name = d.get("name", "")
+            if name.startswith("Draft "):
+                parts = name.split()
+                if len(parts) >= 2 and parts[1].isdigit():
+                    existing_nums.append(int(parts[1]))
+        if existing_nums:
+            return max(existing_nums) + 1
+        return len(self.drafts) + 1
+
+    def save_draft(self, graph, name=None):
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        time_id = int(time.time() * 1000)
+        draft_id = f"draft_{time_id}"
+
+        if not name:
+            draft_num = self.get_next_draft_number()
+            name = f"Draft {draft_num}"
+
+        nodes_data = []
+        for n in graph.nodes.values():
+            nodes_data.append({
+                "id": n.id,
+                "label": n.label,
+                "x": float(n.x),
+                "y": float(n.y),
+                "is_start": bool(n.is_start),
+                "is_goal": bool(n.is_goal),
+                "is_obstacle": bool(n.is_obstacle)
+            })
+
+        edges_data = []
+        for (u_id, v_id), weight in graph.edges.items():
+            edges_data.append({
+                "u_id": u_id,
+                "v_id": v_id,
+                "weight": float(weight)
+            })
+
+        start_node = graph.get_start_node()
+        goal_node = graph.get_goal_node()
+        start_label = start_node.label if start_node else None
+        goal_label = goal_node.label if goal_node else None
+
+        img_filename = f"{draft_id}.png"
+        img_path = os.path.join(self.drafts_dir, img_filename)
+
+        # Generate image preview
+        generate_draft_thumbnail(nodes_data, edges_data, img_path, w=260, h=150)
+
+        draft_item = {
+            "id": draft_id,
+            "name": name,
+            "created_at": timestamp,
+            "node_count": len(nodes_data),
+            "edge_count": len(edges_data),
+            "start_label": start_label,
+            "goal_label": goal_label,
+            "image_path": img_path,
+            "nodes": nodes_data,
+            "edges": edges_data
+        }
+
+        # Add to beginning of drafts (newest first)
+        self.drafts.insert(0, draft_item)
+
+        # Keep strictly last 10 drafts
+        while len(self.drafts) > self.max_drafts:
+            old_draft = self.drafts.pop()
+            old_img = old_draft.get("image_path")
+            if old_img and os.path.exists(old_img):
+                try:
+                    os.remove(old_img)
+                except Exception:
+                    pass
+
+        self.save_to_disk()
+        return draft_item
+
+    def delete_draft(self, draft_id):
+        to_del = None
+        for d in self.drafts:
+            if d.get("id") == draft_id:
+                to_del = d
+                break
+        if to_del:
+            self.drafts.remove(to_del)
+            img_path = to_del.get("image_path")
+            if img_path and os.path.exists(img_path):
+                try:
+                    os.remove(img_path)
+                except Exception:
+                    pass
+            self.save_to_disk()
+            return True
+        return False
+
+
+class DraftsDialog(tk.Toplevel):
+    """
+    Visual gallery window displaying saved map drafts (last 10).
+    Clicking any draft's image or 'Open Map' button loads that map into the visualizer.
+    """
+    def __init__(self, parent, draft_manager, on_select_draft=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.draft_manager = draft_manager
+        self.on_select_draft = on_select_draft
+        self.title("Saved Map Drafts (Last 10)")
+        self.configure(bg=THEME["bg_app"])
+        self.transient(parent)
+        self.photos = []
+
+        w, h = 820, 620
+        x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
+        self.geometry(f"{w}x{h}+{max(40, x)}+{max(40, y)}")
+        self.minsize(680, 500)
+
+        # Header Bar
+        header = tk.Frame(self, bg=THEME["bg_panel"], padx=18, pady=12)
+        header.pack(fill="x", side="top")
+
+        title_frame = tk.Frame(header, bg=THEME["bg_panel"])
+        title_frame.pack(side="left")
+
+        tk.Label(
+            title_frame,
+            text="📁 SAVED MAP DRAFTS",
+            font=FONT_TITLE,
+            bg=THEME["bg_panel"],
+            fg="#38BDF8"
+        ).pack(anchor="w")
+
+        tk.Label(
+            title_frame,
+            text="Click any map preview image to open and edit that graph. Stores last 10 drafts.",
+            font=FONT_SMALL,
+            bg=THEME["bg_panel"],
+            fg=THEME["text_secondary"]
+        ).pack(anchor="w", pady=(2, 0))
+
+        right_frame = tk.Frame(header, bg=THEME["bg_panel"])
+        right_frame.pack(side="right")
+
+        self.count_badge = tk.Label(
+            right_frame,
+            text="",
+            font=FONT_BOLD,
+            bg="#1F2937",
+            fg="#34D399",
+            padx=10,
+            pady=4
+        )
+        self.count_badge.pack(side="left", padx=(0, 10))
+
+        tk.Button(
+            right_frame,
+            text="✕ Close",
+            font=FONT_SMALL,
+            bg=THEME["btn_bg"],
+            fg=THEME["text_secondary"],
+            activebackground=THEME["btn_hover"],
+            activeforeground="#FFFFFF",
+            relief="flat",
+            bd=0,
+            padx=10,
+            pady=4,
+            cursor="hand2",
+            command=self.destroy
+        ).pack(side="left")
+
+        # Scrollable container
+        container = tk.Frame(self, bg=THEME["bg_app"])
+        container.pack(fill="both", expand=True, padx=16, pady=12)
+
+        self.canvas = tk.Canvas(container, bg=THEME["bg_app"], bd=0, highlightthickness=0)
+        self.scrollbar = tk.Scrollbar(container, orient="vertical", command=self.canvas.yview, bg=THEME["bg_panel"])
+        self.scrollable_frame = tk.Frame(self.canvas, bg=THEME["bg_app"])
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+        self.canvas.bind(
+            "<Configure>",
+            lambda e: self.canvas.itemconfig(self.canvas_window, width=e.width)
+        )
+
+        self.bind_mousewheel(self)
+        self.refresh_drafts()
+
+    def bind_mousewheel(self, widget):
+        widget.bind("<MouseWheel>", self._on_mousewheel, add="+")
+        for child in widget.winfo_children():
+            self.bind_mousewheel(child)
+
+    def _on_mousewheel(self, event):
+        if self.canvas.winfo_exists():
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def refresh_drafts(self):
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+        self.photos.clear()
+
+        drafts = self.draft_manager.get_drafts()
+        count = len(drafts)
+        self.count_badge.config(text=f"{count} / 10 Saved")
+
+        if not drafts:
+            empty_box = tk.Frame(self.scrollable_frame, bg=THEME["bg_card"], padx=30, pady=40)
+            empty_box.pack(fill="x", pady=40, padx=20)
+
+            tk.Label(
+                empty_box,
+                text="📭",
+                font=(FONT_FAMILY, 32),
+                bg=THEME["bg_card"],
+                fg=THEME["text_secondary"]
+            ).pack(pady=(0, 10))
+
+            tk.Label(
+                empty_box,
+                text="No Drafts Saved Yet",
+                font=FONT_TITLE,
+                bg=THEME["bg_card"],
+                fg=THEME["text_primary"]
+            ).pack()
+
+            tk.Label(
+                empty_box,
+                text="Design or modify a graph on the canvas and click '💾 Save Draft' beside Center.\nDrafts are automatically stored and persisted across restarts!",
+                font=FONT_REGULAR,
+                bg=THEME["bg_card"],
+                fg=THEME["text_secondary"],
+                justify="center"
+            ).pack(pady=(8, 0))
+            return
+
+        grid_frame = tk.Frame(self.scrollable_frame, bg=THEME["bg_app"])
+        grid_frame.pack(fill="both", expand=True)
+        grid_frame.columnconfigure(0, weight=1)
+        grid_frame.columnconfigure(1, weight=1)
+
+        for idx, draft in enumerate(drafts):
+            row = idx // 2
+            col = idx % 2
+
+            card = tk.Frame(
+                grid_frame,
+                bg=THEME["bg_card"],
+                bd=1,
+                relief="solid",
+                highlightthickness=1,
+                highlightbackground=THEME["border"],
+                padx=12,
+                pady=12
+            )
+            card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
+
+            # Header metadata
+            top_meta = tk.Frame(card, bg=THEME["bg_card"])
+            top_meta.pack(fill="x", pady=(0, 8))
+
+            draft_name = draft.get("name", f"Draft {idx + 1}")
+            tk.Label(
+                top_meta,
+                text=draft_name,
+                font=FONT_BOLD,
+                bg=THEME["bg_card"],
+                fg=THEME["text_primary"]
+            ).pack(side="left")
+
+            created_time = draft.get("created_at", "")
+            tk.Label(
+                top_meta,
+                text=created_time,
+                font=FONT_SMALL,
+                bg=THEME["bg_card"],
+                fg=THEME["text_secondary"]
+            ).pack(side="right")
+
+            # Image Preview Container
+            img_container = tk.Frame(
+                card,
+                bg="#0D1322",
+                bd=1,
+                relief="solid",
+                highlightthickness=1,
+                highlightbackground=THEME["border"]
+            )
+            img_container.pack(fill="x", pady=4)
+
+            img_path = draft.get("image_path", "")
+            img_loaded = False
+
+            if img_path and os.path.exists(img_path):
+                try:
+                    photo = tk.PhotoImage(file=img_path)
+                    self.photos.append(photo)
+                    img_lbl = tk.Label(img_container, image=photo, bg="#0D1322", cursor="hand2")
+                    img_lbl.image = photo
+                    img_lbl.pack(padx=2, pady=2, fill="both")
+                    img_lbl.bind("<Button-1>", lambda e, d=draft: self.select_draft(d))
+                    img_loaded = True
+                except Exception:
+                    img_loaded = False
+
+            if not img_loaded:
+                fallback_canvas = tk.Canvas(
+                    img_container,
+                    width=260,
+                    height=150,
+                    bg="#0D1322",
+                    bd=0,
+                    highlightthickness=0,
+                    cursor="hand2"
+                )
+                fallback_canvas.pack(padx=2, pady=2)
+                self.draw_mini_graph(fallback_canvas, draft.get("nodes", []), draft.get("edges", []))
+                fallback_canvas.bind("<Button-1>", lambda e, d=draft: self.select_draft(d))
+
+            click_hint = tk.Label(
+                card,
+                text="🖱️ Click image to open map",
+                font=(FONT_FAMILY, 8, "italic"),
+                bg=THEME["bg_card"],
+                fg="#38BDF8",
+                cursor="hand2"
+            )
+            click_hint.pack(pady=(4, 6))
+            click_hint.bind("<Button-1>", lambda e, d=draft: self.select_draft(d))
+
+            # Bottom stats
+            stats_frame = tk.Frame(card, bg=THEME["bg_card"])
+            stats_frame.pack(fill="x", pady=(2, 8))
+
+            v_count = draft.get("node_count", len(draft.get("nodes", [])))
+            e_count = draft.get("edge_count", len(draft.get("edges", [])))
+            start_lbl = draft.get("start_label") or "-"
+            goal_lbl = draft.get("goal_label") or "-"
+
+            stat_txt = f"|V|: {v_count}  |E|: {e_count}  Start: {start_lbl}  Goal: {goal_lbl}"
+            tk.Label(
+                stats_frame,
+                text=stat_txt,
+                font=FONT_SMALL,
+                bg=THEME["bg_card"],
+                fg=THEME["text_secondary"]
+            ).pack(anchor="w")
+
+            btn_frame = tk.Frame(card, bg=THEME["bg_card"])
+            btn_frame.pack(fill="x")
+
+            open_btn = tk.Button(
+                btn_frame,
+                text="📂 Open Map",
+                font=FONT_BOLD,
+                bg="#2563EB",
+                fg="#FFFFFF",
+                activebackground="#1D4ED8",
+                activeforeground="#FFFFFF",
+                relief="flat",
+                bd=0,
+                padx=10,
+                pady=4,
+                cursor="hand2",
+                command=lambda d=draft: self.select_draft(d)
+            )
+            open_btn.pack(side="left")
+
+            del_btn = tk.Button(
+                btn_frame,
+                text="🗑️ Delete",
+                font=FONT_SMALL,
+                bg=THEME["btn_bg"],
+                fg="#EF4444",
+                activebackground="#991B1B",
+                activeforeground="#FFFFFF",
+                relief="flat",
+                bd=0,
+                padx=8,
+                pady=4,
+                cursor="hand2",
+                command=lambda d=draft: self.delete_draft_item(d)
+            )
+            del_btn.pack(side="right")
+
+    def draw_mini_graph(self, canvas, nodes, edges):
+        if not nodes:
+            canvas.create_text(130, 75, text="Empty Graph", fill="#64748B", font=FONT_SMALL)
+            return
+        w, h = 260, 150
+        pad = 20
+        xs = [n["x"] for n in nodes]
+        ys = [n["y"] for n in nodes]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+        span_x = max(1.0, max_x - min_x)
+        span_y = max(1.0, max_y - min_y)
+        scale = min((w - 2 * pad) / span_x, (h - 2 * pad) / span_y)
+        scale = min(scale, 1.2)
+        off_x = pad + (w - 2 * pad - span_x * scale) / 2 - min_x * scale
+        off_y = pad + (h - 2 * pad - span_y * scale) / 2 - min_y * scale
+
+        node_map = {n["id"]: n for n in nodes}
+        for e in edges:
+            u = node_map.get(e["u_id"])
+            v = node_map.get(e["v_id"])
+            if u and v:
+                ux = u["x"] * scale + off_x
+                uy = u["y"] * scale + off_y
+                vx = v["x"] * scale + off_x
+                vy = v["y"] * scale + off_y
+                canvas.create_line(ux, uy, vx, vy, fill="#475569", width=2)
+
+        rad = 7
+        for n in nodes:
+            cx = n["x"] * scale + off_x
+            cy = n["y"] * scale + off_y
+            if n.get("is_start"):
+                fill = "#10B981"
+            elif n.get("is_goal"):
+                fill = "#EF4444"
+            elif n.get("is_obstacle"):
+                fill = "#64748B"
+            else:
+                fill = "#38BDF8"
+            canvas.create_oval(cx - rad, cy - rad, cx + rad, cy + rad, fill=fill, outline="#FFFFFF", width=1)
+            canvas.create_text(cx, cy, text=n.get("label", "")[:2], fill="#0B0F19", font=(FONT_FAMILY, 6, "bold"))
+
+    def select_draft(self, draft):
+        if self.on_select_draft:
+            self.on_select_draft(draft)
+        self.destroy()
+
+    def delete_draft_item(self, draft):
+        draft_name = draft.get("name", "Draft")
+        if messagebox.askyesno("Delete Draft", f"Are you sure you want to delete '{draft_name}'?", parent=self):
+            self.draft_manager.delete_draft(draft.get("id"))
+            self.refresh_drafts()
+
+
+# ==============================================================================
 # MAIN APPLICATION GUI CLASS
 # ==============================================================================
 class PathfindingVisualizerApp:
@@ -932,6 +1565,10 @@ class PathfindingVisualizerApp:
         # Logs & Floating Inspector Window
         self.log_history = []
         self.log_dialog = None
+
+        # Drafts System (Persistent storage up to 10 drafts)
+        self.draft_manager = DraftManager()
+        self.drafts_dialog = None
 
         # Build UI
         self.create_header_toolbar()
@@ -1199,6 +1836,23 @@ class PathfindingVisualizerApp:
         )
         self.btn_header_log.pack(side="left", padx=2)
 
+        self.btn_drafts = tk.Button(
+            aux_box,
+            text="📁 Drafts",
+            font=FONT_BOLD,
+            bg=THEME["btn_bg"],
+            fg="#38BDF8",
+            activebackground=THEME["btn_hover"],
+            activeforeground="#FFFFFF",
+            relief="flat",
+            bd=0,
+            padx=6,
+            pady=4,
+            cursor="hand2",
+            command=self.open_drafts_window
+        )
+        self.btn_drafts.pack(side="left", padx=2)
+
         # ----------------------------------------------------------------------
         # ROW 2: Canvas Mode Tools & Live Mode Hint
         # ----------------------------------------------------------------------
@@ -1265,6 +1919,23 @@ class PathfindingVisualizerApp:
             command=self.center_graph
         )
         self.btn_center.pack(side="left", padx=(4, 2))
+
+        self.btn_save_draft = tk.Button(
+            modes_box,
+            text="💾 Save Draft",
+            font=FONT_BOLD,
+            bg=THEME["btn_bg"],
+            fg="#10B981",
+            activebackground="#059669",
+            activeforeground="#FFFFFF",
+            relief="flat",
+            bd=0,
+            padx=8,
+            pady=4,
+            cursor="hand2",
+            command=self.save_draft
+        )
+        self.btn_save_draft.pack(side="left", padx=2)
 
         # Canvas Hint displayed on right side of Row 2
         self.canvas_hint_var = tk.StringVar(value="Mode: Click anywhere on the dark canvas to place a Node.")
@@ -1706,6 +2377,85 @@ class PathfindingVisualizerApp:
         self.log_history.clear()
         if self.log_dialog is not None and self.log_dialog.winfo_exists():
             self.log_dialog.clear_entries()
+
+    # --------------------------------------------------------------------------
+    # DRAFTS SYSTEM METHODS
+    # --------------------------------------------------------------------------
+    def save_draft(self):
+        """Saves current graph/map into Drafts (persists up to 10 drafts)."""
+        if not self.graph.nodes:
+            messagebox.showwarning(
+                "Empty Map",
+                "Cannot save an empty map. Please add nodes to the canvas or load a preset first.",
+                parent=self.root
+            )
+            return None
+
+        draft = self.draft_manager.save_draft(self.graph)
+        draft_name = draft.get("name", "Draft")
+        v_count = len(self.graph.nodes)
+        e_count = len(self.graph.edges)
+
+        self.canvas_hint_var.set(f"Saved to Drafts: '{draft_name}' ({v_count} vertices, {e_count} roads).")
+        self.append_log(f"[Drafts] Successfully saved '{draft_name}' ({v_count} vertices, {e_count} roads). Total stored: {len(self.draft_manager.get_drafts())}/10.")
+
+        if hasattr(self, "drafts_dialog") and self.drafts_dialog and self.drafts_dialog.winfo_exists():
+            self.drafts_dialog.refresh_drafts()
+
+        messagebox.showinfo(
+            "Draft Saved",
+            f"Draft '{draft_name}' saved successfully!\n\nVertices: {v_count} | Roads: {e_count}\nStored in Drafts ({len(self.draft_manager.get_drafts())}/10).",
+            parent=self.root
+        )
+        return draft
+
+    def open_drafts_window(self):
+        """Opens or brings to focus the Drafts window displaying saved maps."""
+        if hasattr(self, "drafts_dialog") and self.drafts_dialog and self.drafts_dialog.winfo_exists():
+            self.drafts_dialog.lift()
+            self.drafts_dialog.focus_force()
+        else:
+            self.drafts_dialog = DraftsDialog(self.root, self.draft_manager, on_select_draft=self.load_draft)
+
+    def load_draft(self, draft):
+        """Loads a saved draft's graph into the main editor."""
+        if not draft or "nodes" not in draft:
+            return
+
+        self.reset_search_path()
+        self.graph.clear_all()
+
+        for n_data in draft.get("nodes", []):
+            node = Node(
+                node_id=n_data["id"],
+                label=n_data["label"],
+                x=float(n_data["x"]),
+                y=float(n_data["y"]),
+                is_start=bool(n_data.get("is_start", False)),
+                is_goal=bool(n_data.get("is_goal", False)),
+                is_obstacle=bool(n_data.get("is_obstacle", False))
+            )
+            self.graph.nodes[node.id] = node
+
+        for e_data in draft.get("edges", []):
+            u_id = e_data["u_id"]
+            v_id = e_data["v_id"]
+            weight = e_data["weight"]
+            if u_id in self.graph.nodes and v_id in self.graph.nodes:
+                self.graph.add_edge(u_id, v_id, weight)
+
+        draft_name = draft.get("name", "Saved Map")
+        v_count = len(self.graph.nodes)
+        e_count = len(self.graph.edges)
+
+        self.clear_log()
+        self.append_log(f"Loaded Draft: {draft_name} ({v_count} vertices, {e_count} roads).")
+        self.canvas_hint_var.set(f"Loaded draft: {draft_name}. Ready to edit or run pathfinding.")
+        self.redraw()
+
+        if hasattr(self, "drafts_dialog") and self.drafts_dialog and self.drafts_dialog.winfo_exists():
+            self.drafts_dialog.destroy()
+            self.drafts_dialog = None
 
     # --------------------------------------------------------------------------
     # CANVAS INTERACTIONS

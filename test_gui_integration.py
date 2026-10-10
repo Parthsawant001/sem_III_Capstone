@@ -11,10 +11,19 @@ Validates end-to-end functionality of PathfindingVisualizerApp in pure Python:
 - DSA Inspector dialog initialization
 """
 
+import os
+import tempfile
 import tkinter as tk
 import unittest
 from unittest.mock import patch, MagicMock
-from app import PathfindingVisualizerApp, DSAInspectorDialog, DSAExecutionLogDialog, DarkWeightDialog
+from app import (
+    PathfindingVisualizerApp,
+    DSAInspectorDialog,
+    DSAExecutionLogDialog,
+    DarkWeightDialog,
+    DraftManager,
+    DraftsDialog
+)
 
 
 class TestVisualizerIntegration(unittest.TestCase):
@@ -368,6 +377,109 @@ class TestVisualizerIntegration(unittest.TestCase):
 
         self.assertAlmostEqual(new_cx, 450.0, delta=1.5)
         self.assertAlmostEqual(new_cy, 350.0, delta=1.5)
+
+    def test_draft_buttons_existence_and_placement(self):
+        # 1. Verify Drafts button exists and has correct text
+        self.assertTrue(hasattr(self.app, "btn_drafts"))
+        self.assertIn("Drafts", self.app.btn_drafts.cget("text"))
+
+        # 2. Verify Save Draft button exists and has correct text
+        self.assertTrue(hasattr(self.app, "btn_save_draft"))
+        self.assertIn("Save Draft", self.app.btn_save_draft.cget("text"))
+
+    def test_save_draft_empty_graph(self):
+        # Empty graph should not save a draft
+        self.app.graph.clear_all()
+        result = self.app.save_draft()
+        self.assertIsNone(result)
+
+    def test_save_and_load_draft_workflow(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_mgr = DraftManager(drafts_dir=tmp_dir)
+            self.app.draft_manager = temp_mgr
+
+            # 1. Load preset simple and customize it
+            self.app.load_preset_simple()
+            original_node_labels = sorted(n.label for n in self.app.graph.nodes.values())
+            original_edge_count = len(self.app.graph.edges)
+            start_node = self.app.graph.get_start_node()
+            goal_node = self.app.graph.get_goal_node()
+
+            # 2. Save draft
+            saved_draft = self.app.save_draft()
+            self.assertIsNotNone(saved_draft)
+            self.assertEqual(len(temp_mgr.get_drafts()), 1)
+            self.assertEqual(saved_draft["node_count"], len(original_node_labels))
+            self.assertEqual(saved_draft["edge_count"], original_edge_count)
+            self.assertEqual(saved_draft["start_label"], start_node.label)
+            self.assertEqual(saved_draft["goal_label"], goal_node.label)
+
+            # 3. Verify image file exists
+            img_path = saved_draft.get("image_path")
+            self.assertTrue(os.path.exists(img_path))
+
+            # 4. Clear graph completely
+            self.app.graph.clear_all()
+            self.assertEqual(len(self.app.graph.nodes), 0)
+
+            # 5. Load draft back
+            self.app.load_draft(saved_draft)
+            restored_labels = sorted(n.label for n in self.app.graph.nodes.values())
+            self.assertEqual(restored_labels, original_node_labels)
+            self.assertEqual(len(self.app.graph.edges), original_edge_count)
+            self.assertEqual(self.app.graph.get_start_node().label, start_node.label)
+            self.assertEqual(self.app.graph.get_goal_node().label, goal_node.label)
+
+    def test_drafts_max_10_limit_and_rotation(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_mgr = DraftManager(drafts_dir=tmp_dir)
+            self.app.draft_manager = temp_mgr
+            self.app.load_preset_simple()
+
+            # Save 12 drafts
+            for _ in range(12):
+                self.app.save_draft()
+
+            drafts = temp_mgr.get_drafts()
+            self.assertEqual(len(drafts), 10)
+            # Ensure the latest draft is at index 0
+            self.assertEqual(drafts[0]["name"], "Draft 12")
+
+    def test_drafts_persistence_across_restarts(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mgr1 = DraftManager(drafts_dir=tmp_dir)
+            self.app.draft_manager = mgr1
+            self.app.load_preset_diamond()
+            draft1 = self.app.save_draft()
+
+            self.app.load_preset_obstacle_wall()
+            draft2 = self.app.save_draft()
+
+            self.assertEqual(len(mgr1.get_drafts()), 2)
+
+            # Simulate app restart with a fresh DraftManager pointing to the same folder
+            mgr_restarted = DraftManager(drafts_dir=tmp_dir)
+            reloaded_drafts = mgr_restarted.get_drafts()
+            self.assertEqual(len(reloaded_drafts), 2)
+            self.assertEqual(reloaded_drafts[0]["id"], draft2["id"])
+            self.assertEqual(reloaded_drafts[1]["id"], draft1["id"])
+
+    def test_drafts_window_open_and_interaction(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_mgr = DraftManager(drafts_dir=tmp_dir)
+            self.app.draft_manager = temp_mgr
+            self.app.load_preset_simple()
+            self.app.save_draft()
+
+            # Open drafts window
+            self.app.open_drafts_window()
+            self.assertIsNotNone(self.app.drafts_dialog)
+            self.assertTrue(self.app.drafts_dialog.winfo_exists())
+
+            # Simulate selecting the draft from the dialog
+            draft = temp_mgr.get_drafts()[0]
+            self.app.drafts_dialog.select_draft(draft)
+            self.assertIsNone(self.app.drafts_dialog)
 
 
 if __name__ == "__main__":
