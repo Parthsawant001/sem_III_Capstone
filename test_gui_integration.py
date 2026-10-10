@@ -6,6 +6,7 @@ Validates end-to-end functionality of PathfindingVisualizerApp in pure Python:
 - A* execution & path reconstruction
 - Greedy Best-First Search execution
 - Breadth-First Search (BFS) execution
+- Depth-First Search (DFS) execution
 - Obstacle bypass verification
 - Unreachable node handling
 - DSA Inspector dialog initialization
@@ -109,6 +110,22 @@ class TestVisualizerIntegration(unittest.TestCase):
         self.assertTrue(len(self.app.final_path) > 0)
         self.assertEqual(self.app.final_path[0], self.app.graph.get_start_node().id)
         self.assertEqual(self.app.final_path[-1], self.app.graph.get_goal_node().id)
+
+    def test_preset_simple_dfs_completion(self):
+        self.app.load_preset_simple()
+        self.app.algo_var.set("Depth-First Search (DFS)")
+        self.app.start_visualization()
+
+        steps = 0
+        while self.app.anim_running and steps < 200:
+            self.app.step_execution()
+            steps += 1
+
+        self.assertFalse(self.app.anim_running)
+        self.assertTrue(len(self.app.final_path) > 0)
+        self.assertEqual(self.app.final_path[0], self.app.graph.get_start_node().id)
+        self.assertEqual(self.app.final_path[-1], self.app.graph.get_goal_node().id)
+        self.assertIn("Stack", self.app.queue_title_var.get())
 
     def test_obstacle_wall_bypassed(self):
         self.app.load_preset_obstacle_wall()

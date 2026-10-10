@@ -6,6 +6,7 @@ Tests:
 - A* Search Algorithm (Min-Heap, Euclidean heuristic, f = g + h)
 - Greedy Best-First Search (Heuristic-only min-heap)
 - Breadth-First Search (FIFO Queue deque, unweighted minimum hops)
+- Depth-First Search (LIFO Stack, graph backtracking traversal)
 - Obstacle avoidance & unreachable goal handling
 """
 
@@ -236,6 +237,47 @@ def run_bfs(graph, start_id, goal_id):
     return None, float('inf'), nodes_explored
 
 
+def run_dfs(graph, start_id, goal_id):
+    if start_id not in graph.nodes or goal_id not in graph.nodes:
+        return None, float('inf'), 0
+    if graph.nodes[start_id]['obstacle'] or graph.nodes[goal_id]['obstacle']:
+        return None, float('inf'), 0
+
+    # LIFO Stack
+    stack = [start_id]
+    visited = {start_id}
+    came_from = {}
+    nodes_explored = 0
+
+    while stack:
+        current = stack.pop()
+        nodes_explored += 1
+
+        if current == goal_id:
+            path = []
+            curr = goal_id
+            while curr is not None:
+                path.append(curr)
+                curr = came_from.get(curr)
+            path.reverse()
+            total_dist = 0.0
+            for i in range(len(path) - 1):
+                for nbr, w in graph.adj.get(path[i], []):
+                    if nbr == path[i + 1]:
+                        total_dist += w
+                        break
+            return path, round(total_dist, 1), nodes_explored
+
+        for neighbor, weight in graph.adj.get(current, []):
+            if graph.nodes[neighbor]['obstacle'] or neighbor in visited:
+                continue
+            visited.add(neighbor)
+            came_from[neighbor] = current
+            stack.append(neighbor)
+
+    return None, float('inf'), nodes_explored
+
+
 class TestDSAPathfinding(unittest.TestCase):
     def setUp(self):
         self.g = Graph()
@@ -279,6 +321,24 @@ class TestDSAPathfinding(unittest.TestCase):
         self.assertIsNotNone(path)
         self.assertEqual(path[0], 'A')
         self.assertEqual(path[-1], 'D')
+
+    def test_dfs_path(self):
+        path, dist, explored = run_dfs(self.g, 'A', 'D')
+        self.assertIsNotNone(path)
+        self.assertEqual(path[0], 'A')
+        self.assertEqual(path[-1], 'D')
+
+    def test_dfs_obstacle_avoidance(self):
+        self.g.nodes['C']['obstacle'] = True
+        path, dist, explored = run_dfs(self.g, 'A', 'D')
+        self.assertEqual(path, ['A', 'B', 'D'])
+        self.assertAlmostEqual(dist, 24.0)
+
+    def test_dfs_disconnected_goal(self):
+        self.g.add_node('E', 'E', 300, 0)
+        path, dist, explored = run_dfs(self.g, 'A', 'E')
+        self.assertIsNone(path)
+        self.assertEqual(dist, float('inf'))
 
     def test_obstacle_avoidance(self):
         # Block node C

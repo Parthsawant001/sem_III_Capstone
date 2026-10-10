@@ -7,11 +7,13 @@ Core DSA Concepts Implemented:
 - Graph Data Structure: Adjacency List representation with degree & density metrics.
 - Min-Heap Priority Queue: Python `heapq` with real-time heap state inspection.
 - FIFO Queue: Python `collections.deque` for unweighted breadth-first exploration.
-- 4 Pathfinding Algorithms:
+- LIFO Stack: Python list for depth-first branch exploration and backtracking.
+- 5 Pathfinding Algorithms:
     1. Dijkstra's Algorithm (Single-Source Shortest Path, Min-Heap relaxation)
     2. A* Search Algorithm (Informed Heuristic Search: f(n) = g(n) + h(n))
     3. Greedy Best-First Search (Heuristic-only prioritization: f(n) = h(n))
     4. Breadth-First Search (BFS level-order unweighted shortest path)
+    5. Depth-First Search (DFS backtracking LIFO stack traversal)
 - Real-time step-by-step animation via Tkinter `.after()` loop (non-blocking).
 - Interactive Canvas: Node creation, edge weight modal, drag-and-drop, right-click context menu.
 - DSA Inspector: Detailed view of Adjacency List and Graph Theory metrics (|V|, |E|, density).
@@ -550,6 +552,83 @@ def bfs_step_generator(graph, start_id, goal_id):
             queue.append(neighbor)
             q_snap = [graph.nodes[qid].label for qid in list(queue)[:5]]
             yield ("FRONTIER_ADD", (neighbor, 0.0, 0.0, q_snap), f"[FIFO Enqueue] Enqueued {n_node.label} into queue")
+
+        yield ("CLOSE_NODE", current, f"[Settled] Finished {curr_node.label}")
+
+    yield ("NO_PATH", {"explored_count": explored_count, "total_steps": total_steps}, f"[Error] Goal {goal_lbl} unreachable.")
+
+
+def dfs_step_generator(graph, start_id, goal_id):
+    """
+    Depth-First Search (DFS) Algorithm
+    DSA Structure: LIFO Stack (list)
+    Complexity: Time O(V + E), Space O(V)
+    Explores as deep as possible along each branch before backtracking.
+    """
+    stack = [start_id]
+    visited = {start_id}
+    came_from = {}
+    explored_count = 0
+    total_steps = 0
+
+    start_lbl = graph.nodes[start_id].label
+    goal_lbl = graph.nodes[goal_id].label
+
+    yield ("LOG", None, f"[DSA DFS] Depth-First Traversal with LIFO Stack ({start_lbl} -> {goal_lbl})")
+    yield ("FRONTIER_ADD", (start_id, 0.0, 0.0, [start_lbl]), f"[Stack Push] Pushed Start {start_lbl} onto stack")
+
+    while stack:
+        current = stack.pop()
+        explored_count += 1
+        curr_node = graph.nodes[current]
+
+        # Top of stack first
+        s_snap = [graph.nodes[sid].label for sid in reversed(stack[-5:])]
+        yield ("VISIT_NODE", (current, 0.0, s_snap), f"[Stack Pop] Visiting node {curr_node.label} (LIFO)")
+        total_steps += 1
+
+        if current == goal_id:
+            path = []
+            curr = goal_id
+            while curr is not None:
+                path.append(curr)
+                curr = came_from.get(curr)
+            path.reverse()
+
+            total_dist = 0.0
+            for i in range(len(path) - 1):
+                for nbr, w in graph.get_neighbors(path[i]):
+                    if nbr == path[i + 1]:
+                        total_dist += w
+                        break
+
+            yield ("LOG", None, f"[DFS Done] Goal {goal_lbl} reached in {len(path)-1} hops (Cost: {total_dist:.1f})")
+            yield ("PATH_FOUND", {
+                "path": path,
+                "total_dist": round(total_dist, 1),
+                "explored_count": explored_count,
+                "total_steps": total_steps
+            }, f"[DFS Path] {' -> '.join(graph.nodes[n].label for n in path)}")
+            return
+
+        for neighbor, weight in graph.get_neighbors(current):
+            total_steps += 1
+            n_node = graph.nodes[neighbor]
+
+            if n_node.is_obstacle:
+                yield ("EXAMINE_EDGE", (current, neighbor, False), f"[Obstacle] Skipped {n_node.label}")
+                continue
+            if neighbor in visited:
+                yield ("EXAMINE_EDGE", (current, neighbor, False), f"[Visited] {n_node.label}")
+                continue
+
+            yield ("EXAMINE_EDGE", (current, neighbor, True), f"[DFS Traversal] Exploring road {curr_node.label} -> {n_node.label} (w={weight:g})")
+
+            visited.add(neighbor)
+            came_from[neighbor] = current
+            stack.append(neighbor)
+            s_snap = [graph.nodes[sid].label for sid in reversed(stack[-5:])]
+            yield ("FRONTIER_ADD", (neighbor, 0.0, 0.0, s_snap), f"[Stack Push] Pushed {n_node.label} onto stack")
 
         yield ("CLOSE_NODE", current, f"[Settled] Finished {curr_node.label}")
 
@@ -1574,6 +1653,7 @@ class PathfindingVisualizerApp:
         self.create_header_toolbar()
         self.create_main_content()
         self.create_status_bar()
+        self.algo_var.trace_add("write", lambda *args: self.on_algo_change())
         self.root.bind("<space>", lambda e: self.toggle_pause())
 
         # Load initial preset
@@ -1762,7 +1842,8 @@ class PathfindingVisualizerApp:
                 "Dijkstra's Algorithm",
                 "A* Search Algorithm",
                 "Greedy Best-First Search",
-                "Breadth-First Search (BFS)"
+                "Breadth-First Search (BFS)",
+                "Depth-First Search (DFS)"
             ],
             state="readonly",
             width=18,
@@ -2095,10 +2176,17 @@ class PathfindingVisualizerApp:
             fg="#FBBF24"
         ).pack(anchor="w")
 
-        # Queue / Heap Live Snapshot
+        # Queue / Heap / Stack Live Snapshot
         queue_box = tk.Frame(dsa_card, bg=THEME["bg_card_inner"], padx=6, pady=4)
         queue_box.pack(fill="x", pady=(4, 0))
-        tk.Label(queue_box, text="Live Priority Queue State:", font=FONT_SMALL, bg=THEME["bg_card_inner"], fg=THEME["text_secondary"]).pack(anchor="w")
+        self.queue_title_var = tk.StringVar(value="Live Priority Queue State:")
+        tk.Label(
+            queue_box,
+            textvariable=self.queue_title_var,
+            font=FONT_SMALL,
+            bg=THEME["bg_card_inner"],
+            fg=THEME["text_secondary"]
+        ).pack(anchor="w")
         self.queue_snapshot_var = tk.StringVar(value="Queue: [ Empty ]")
         tk.Label(
             queue_box,
@@ -2343,10 +2431,20 @@ class PathfindingVisualizerApp:
             "A* Search Algorithm": ("Data Structure: Min-Heap (heapq)", "Complexity: Time O((V+E) log V) | Space O(V)"),
             "Greedy Best-First Search": ("Data Structure: Min-Heap (heapq)", "Complexity: Time O(V log V) | Space O(V)"),
             "Breadth-First Search (BFS)": ("Data Structure: FIFO Queue (deque)", "Complexity: Time O(V + E) | Space O(V)"),
+            "Depth-First Search (DFS)": ("Data Structure: LIFO Stack (list)", "Complexity: Time O(V + E) | Space O(V)"),
         }
-        ds_info, comp_info = complexities.get(algo, ("Data Structure: Queue", "Complexity: O(V+E)"))
+        ds_info, comp_info = complexities.get(algo, ("Data Structure: Queue / Stack", "Complexity: O(V+E)"))
         self.dsa_type_var.set(ds_info)
         self.dsa_complexity_var.set(comp_info)
+        if "DFS" in algo or "Depth" in algo:
+            self.queue_title_var.set("Live LIFO Stack State:")
+            self.queue_snapshot_var.set("Stack: [ Empty ]")
+        elif "BFS" in algo or "Breadth" in algo:
+            self.queue_title_var.set("Live FIFO Queue State:")
+            self.queue_snapshot_var.set("Queue: [ Empty ]")
+        else:
+            self.queue_title_var.set("Live Priority Queue State:")
+            self.queue_snapshot_var.set("Queue: [ Empty ]")
         self.append_log(f"Switched Algorithm: {algo}")
 
     def open_dsa_inspector(self):
@@ -2976,6 +3074,8 @@ class PathfindingVisualizerApp:
             self.anim_generator = greedy_bfs_step_generator(self.graph, start_node.id, goal_node.id)
         elif "Breadth" in algo_name or "BFS" in algo_name:
             self.anim_generator = bfs_step_generator(self.graph, start_node.id, goal_node.id)
+        elif "Depth" in algo_name or "DFS" in algo_name:
+            self.anim_generator = dfs_step_generator(self.graph, start_node.id, goal_node.id)
         else:
             self.anim_generator = dijkstra_step_generator(self.graph, start_node.id, goal_node.id)
 
@@ -3018,6 +3118,8 @@ class PathfindingVisualizerApp:
                 self.anim_generator = greedy_bfs_step_generator(self.graph, start_node.id, goal_node.id)
             elif "Breadth" in algo_name or "BFS" in algo_name:
                 self.anim_generator = bfs_step_generator(self.graph, start_node.id, goal_node.id)
+            elif "Depth" in algo_name or "DFS" in algo_name:
+                self.anim_generator = dfs_step_generator(self.graph, start_node.id, goal_node.id)
             else:
                 self.anim_generator = dijkstra_step_generator(self.graph, start_node.id, goal_node.id)
 
@@ -3040,7 +3142,8 @@ class PathfindingVisualizerApp:
             node_id, g_val, f_val, snap = data
             self.frontier_nodes.add(node_id)
             self.val_frontier_var.set(str(len(self.frontier_nodes)))
-            self.queue_snapshot_var.set(f"Queue: {snap}")
+            prefix = "Stack" if ("Depth" in self.algo_var.get() or "DFS" in self.algo_var.get()) else "Queue"
+            self.queue_snapshot_var.set(f"{prefix}: {snap}")
 
         elif event_type == "VISIT_NODE":
             node_id, current_dist, snap = data
@@ -3050,7 +3153,8 @@ class PathfindingVisualizerApp:
             self.visited_nodes.add(node_id)
             self.val_explored_var.set(str(len(self.visited_nodes)))
             self.val_frontier_var.set(str(len(self.frontier_nodes)))
-            self.queue_snapshot_var.set(f"Queue: {snap}")
+            prefix = "Stack" if ("Depth" in self.algo_var.get() or "DFS" in self.algo_var.get()) else "Queue"
+            self.queue_snapshot_var.set(f"{prefix}: {snap}")
 
         elif event_type == "EXAMINE_EDGE":
             u, v, is_valid = data
@@ -3228,7 +3332,8 @@ class PathfindingVisualizerApp:
         self.val_steps_var.set("0")
         self.val_frontier_var.set("0")
         self.val_sequence_var.set("None")
-        self.queue_snapshot_var.set("Queue: [ Empty ]")
+        prefix = "Stack" if ("Depth" in self.algo_var.get() or "DFS" in self.algo_var.get()) else "Queue"
+        self.queue_snapshot_var.set(f"{prefix}: [ Empty ]")
 
     def reset_search_path(self):
         if self.timer_id is not None:
@@ -3459,7 +3564,7 @@ class PathfindingVisualizerApp:
                     self.graph.add_edge(curr.id, down.id, 10.0)
 
         self.clear_log()
-        self.append_log("Loaded Preset 4: Grid Road Map (Great for Dijkstra vs A* vs BFS).")
+        self.append_log("Loaded Preset 4: Grid Road Map (Great for Dijkstra vs A* vs BFS vs DFS).")
         self.redraw()
         self.center_graph()
 

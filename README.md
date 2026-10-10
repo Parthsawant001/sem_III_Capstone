@@ -22,10 +22,11 @@ This application is built from the ground up to demonstrate fundamental **Data S
   - **Graph Density**: $D = \frac{2|E|}{|V|(|V|-1)}$ for undirected graphs.
   - **Average Vertex Degree**: $\bar{d} = \frac{2|E|}{|V|}$.
 
-### 2. Priority Queue (Min-Heap)
-- Implemented using Python's native `heapq` module.
-- Supports efficient $O(\log |V|)$ extraction of the minimum distance vertex and $O(\log |V|)$ key relaxation.
-- **Live Min-Heap Monitor**: Real-time side panel display showing current elements inside the priority queue array during search execution.
+### 2. Priority Queue, FIFO Queue & LIFO Stack
+- **Min-Heap (`heapq`)**: Supports efficient $O(\log |V|)$ extraction of the minimum distance/cost vertex and key relaxation for Dijkstra, A*, and Greedy Best-First.
+- **FIFO Queue (`deque`)**: Level-order frontier for Breadth-First Search (BFS).
+- **LIFO Stack (`list`)**: Backtracking frontier for Depth-First Search (DFS).
+- **Live Data Structure Monitor**: Real-time side panel display showing current elements inside the priority queue array, FIFO queue, or LIFO stack during search execution.
 
 ### 3. Pathfinding Algorithms Implemented
 
@@ -35,6 +36,7 @@ This application is built from the ground up to demonstrate fundamental **Data S
 | **A\* Search Algorithm** | Min-Heap (`heapq`) | $f(n) = g(n) + h(n)$ (Euclidean) | $O((V + E) \log V)$ | $O(V)$ | **Yes** (Admissible heuristic) |
 | **Greedy Best-First** | Min-Heap (`heapq`) | $f(n) = h(n)$ | $O(V \log V)$ | $O(V)$ | No (Heuristic trade-off) |
 | **Breadth-First Search** | FIFO Queue (`deque`) | Level-Order Queue traversal | $O(V + E)$ | $O(V)$ | **Yes** (Unweighted / minimum hops) |
+| **Depth-First Search** | LIFO Stack (`list`) | Backtracking Stack traversal | $O(V + E)$ | $O(V)$ | No (Explores depth first) |
 
 ---
 
