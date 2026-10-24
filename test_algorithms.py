@@ -200,6 +200,8 @@ def run_bfs(graph, start_id, goal_id):
         return None, float('inf'), 0
     if graph.nodes[start_id]['obstacle'] or graph.nodes[goal_id]['obstacle']:
         return None, float('inf'), 0
+    if start_id == goal_id:
+        return [start_id], 0.0, 1
 
     # FIFO Queue
     queue = deque([start_id])
@@ -211,27 +213,27 @@ def run_bfs(graph, start_id, goal_id):
         current = queue.popleft()
         nodes_explored += 1
 
-        if current == goal_id:
-            path = []
-            curr = goal_id
-            while curr is not None:
-                path.append(curr)
-                curr = came_from.get(curr)
-            path.reverse()
-            # Calculate total distance of the BFS path
-            total_dist = 0.0
-            for i in range(len(path) - 1):
-                for nbr, w in graph.adj.get(path[i], []):
-                    if nbr == path[i + 1]:
-                        total_dist += w
-                        break
-            return path, round(total_dist, 1), nodes_explored
-
         for neighbor, weight in graph.adj.get(current, []):
             if graph.nodes[neighbor]['obstacle'] or neighbor in visited:
                 continue
             visited.add(neighbor)
             came_from[neighbor] = current
+            if neighbor == goal_id:
+                nodes_explored += 1
+                path = []
+                curr = goal_id
+                while curr is not None:
+                    path.append(curr)
+                    curr = came_from.get(curr)
+                path.reverse()
+                # Calculate total distance of the BFS path
+                total_dist = 0.0
+                for i in range(len(path) - 1):
+                    for nbr, w in graph.adj.get(path[i], []):
+                        if nbr == path[i + 1]:
+                            total_dist += w
+                            break
+                return path, round(total_dist, 1), nodes_explored
             queue.append(neighbor)
 
     return None, float('inf'), nodes_explored

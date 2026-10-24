@@ -498,6 +498,53 @@ class TestVisualizerIntegration(unittest.TestCase):
             self.app.drafts_dialog.select_draft(draft)
             self.assertIsNone(self.app.drafts_dialog)
 
+    def test_preset_binary_tree_structure(self):
+        self.app.load_preset_binary_tree()
+        self.assertEqual(len(self.app.graph.nodes), 15)
+        self.assertEqual(len(self.app.graph.edges), 14)
+        start = self.app.graph.get_start_node()
+        goal = self.app.graph.get_goal_node()
+        self.assertIsNotNone(start)
+        self.assertIsNotNone(goal)
+        self.assertEqual(start.label, "A")
+        self.assertEqual(goal.label, "O")
+
+    def test_preset_binary_tree_bfs_completion(self):
+        self.app.load_preset_binary_tree()
+        self.app.algo_var.set("Breadth-First Search (BFS)")
+        self.app.start_visualization()
+
+        steps = 0
+        while self.app.anim_running and steps < 250:
+            self.app.step_execution()
+            steps += 1
+
+        self.assertFalse(self.app.anim_running)
+        self.assertTrue(len(self.app.final_path) > 0)
+        start = self.app.graph.get_start_node()
+        goal = self.app.graph.get_goal_node()
+        self.assertEqual(self.app.final_path[0], start.id)
+        self.assertEqual(self.app.final_path[-1], goal.id)
+        path_labels = [self.app.graph.nodes[n].label for n in self.app.final_path]
+        self.assertEqual(path_labels, ["A", "C", "G", "O"])
+
+    def test_bfs_no_extra_routes_after_goal(self):
+        # On Preset 1, node D discovers goal F. Node E should never be expanded.
+        self.app.load_preset_simple()
+        self.app.algo_var.set("Breadth-First Search (BFS)")
+        self.app.start_visualization()
+
+        steps = 0
+        while self.app.anim_running and steps < 200:
+            self.app.step_execution()
+            steps += 1
+
+        self.assertFalse(self.app.anim_running)
+        # Verify node E is not in visited nodes because goal was reached before expanding E
+        e_nodes = [nid for nid, n in self.app.graph.nodes.items() if n.label == "E"]
+        self.assertTrue(len(e_nodes) == 1)
+        self.assertNotIn(e_nodes[0], self.app.visited_nodes)
+
 
 if __name__ == "__main__":
     unittest.main()

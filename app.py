@@ -501,38 +501,26 @@ def bfs_step_generator(graph, start_id, goal_id):
     yield ("LOG", None, f"[DSA BFS] Unweighted Level-Order Traversal with FIFO Queue ({start_lbl} -> {goal_lbl})")
     yield ("FRONTIER_ADD", (start_id, 0.0, 0.0, [start_lbl]), f"[FIFO Enqueue] Start {start_lbl}")
 
+    if start_id == goal_id:
+        yield ("LOG", None, f"[BFS Done] Start is Goal ({start_lbl})!")
+        yield ("PATH_FOUND", {
+            "path": [start_id],
+            "total_dist": 0.0,
+            "explored_count": 1,
+            "total_steps": 1
+        }, f"[BFS Shortest Hops] {start_lbl}")
+        return
+
     while queue:
         current = queue.popleft()
         explored_count += 1
         curr_node = graph.nodes[current]
 
         q_snap = [graph.nodes[qid].label for qid in list(queue)[:5]]
+        if len(queue) > 5:
+            q_snap.append(f"+{len(queue)-5} more")
         yield ("VISIT_NODE", (current, 0.0, q_snap), f"[FIFO Dequeue] Visiting node {curr_node.label} (Level-Order)")
         total_steps += 1
-
-        if current == goal_id:
-            path = []
-            curr = goal_id
-            while curr is not None:
-                path.append(curr)
-                curr = came_from.get(curr)
-            path.reverse()
-
-            total_dist = 0.0
-            for i in range(len(path) - 1):
-                for nbr, w in graph.get_neighbors(path[i]):
-                    if nbr == path[i + 1]:
-                        total_dist += w
-                        break
-
-            yield ("LOG", None, f"[BFS Done] Goal {goal_lbl} reached in {len(path)-1} hops (Cost: {total_dist:.1f})")
-            yield ("PATH_FOUND", {
-                "path": path,
-                "total_dist": round(total_dist, 1),
-                "explored_count": explored_count,
-                "total_steps": total_steps
-            }, f"[BFS Shortest Hops] {' -> '.join(graph.nodes[n].label for n in path)}")
-            return
 
         for neighbor, weight in graph.get_neighbors(current):
             total_steps += 1
@@ -549,8 +537,42 @@ def bfs_step_generator(graph, start_id, goal_id):
 
             visited.add(neighbor)
             came_from[neighbor] = current
+
+            # Early goal test upon GENERATION (standard BFS optimization - Russell & Norvig AIMA 3.4.2)
+            # Guaranteed shortest unweighted path on first discovery; stops immediately without checking further routes
+            if neighbor == goal_id:
+                explored_count += 1
+                path = []
+                curr = goal_id
+                while curr is not None:
+                    path.append(curr)
+                    curr = came_from.get(curr)
+                path.reverse()
+
+                total_dist = 0.0
+                for i in range(len(path) - 1):
+                    for nbr, w in graph.get_neighbors(path[i]):
+                        if nbr == path[i + 1]:
+                            total_dist += w
+                            break
+
+                q_snap = [graph.nodes[qid].label for qid in list(queue)[:5]]
+                if len(queue) > 5:
+                    q_snap.append(f"+{len(queue)-5} more")
+                yield ("FRONTIER_ADD", (neighbor, 0.0, 0.0, q_snap), f"[FIFO Enqueue] Goal {goal_lbl} reached!")
+                yield ("LOG", None, f"[BFS Done] Goal {goal_lbl} reached in {len(path)-1} hops (Cost: {total_dist:.1f})")
+                yield ("PATH_FOUND", {
+                    "path": path,
+                    "total_dist": round(total_dist, 1),
+                    "explored_count": explored_count,
+                    "total_steps": total_steps
+                }, f"[BFS Shortest Hops] {' -> '.join(graph.nodes[n].label for n in path)}")
+                return
+
             queue.append(neighbor)
             q_snap = [graph.nodes[qid].label for qid in list(queue)[:5]]
+            if len(queue) > 5:
+                q_snap.append(f"+{len(queue)-5} more")
             yield ("FRONTIER_ADD", (neighbor, 0.0, 0.0, q_snap), f"[FIFO Enqueue] Enqueued {n_node.label} into queue")
 
         yield ("CLOSE_NODE", current, f"[Settled] Finished {curr_node.label}")
@@ -1878,6 +1900,7 @@ class PathfindingVisualizerApp:
         preset_menu.add_command(label="2. Diamond & Detours", command=self.load_preset_diamond)
         preset_menu.add_command(label="3. Obstacle Maze Barrier", command=self.load_preset_obstacle_wall)
         preset_menu.add_command(label="4. Grid Road Map", command=self.load_preset_grid)
+        preset_menu.add_command(label="5. 4-Layer Binary Tree", command=self.load_preset_binary_tree)
         preset_menu.add_separator()
         preset_menu.add_command(label="🎯 Center in Middle", command=self.center_graph)
         preset_mb["menu"] = preset_menu
@@ -3565,6 +3588,65 @@ class PathfindingVisualizerApp:
 
         self.clear_log()
         self.append_log("Loaded Preset 4: Grid Road Map (Great for Dijkstra vs A* vs BFS vs DFS).")
+        self.redraw()
+        self.center_graph()
+
+    def load_preset_binary_tree(self):
+        self.reset_search_path()
+        self.graph.clear_all()
+
+        # 4 Layers (15 vertices total):
+        # Layer 0 (Root, Level 0): A (Start)
+        # Layer 1 (Level 1): B, C
+        # Layer 2 (Level 2): D, E, F, G
+        # Layer 3 (Level 3 - 8 Leaves): H, I, J, K, L, M, N, O (Goal)
+
+        # Layer 0 (Depth 0 - Root)
+        n_a = self.graph.add_node(450, 80, label="A", is_start=True)
+
+        # Layer 1 (Depth 1)
+        n_b = self.graph.add_node(240, 180, label="B")
+        n_c = self.graph.add_node(660, 180, label="C")
+
+        # Layer 2 (Depth 2)
+        n_d = self.graph.add_node(135, 280, label="D")
+        n_e = self.graph.add_node(345, 280, label="E")
+        n_f = self.graph.add_node(555, 280, label="F")
+        n_g = self.graph.add_node(765, 280, label="G")
+
+        # Layer 3 (Depth 3 - Leaves)
+        n_h = self.graph.add_node(80, 380, label="H")
+        n_i = self.graph.add_node(190, 380, label="I")
+        n_j = self.graph.add_node(290, 380, label="J")
+        n_k = self.graph.add_node(400, 380, label="K")
+        n_l = self.graph.add_node(500, 380, label="L")
+        n_m = self.graph.add_node(610, 380, label="M")
+        n_n = self.graph.add_node(710, 380, label="N")
+        n_o = self.graph.add_node(820, 380, label="O", is_goal=True)
+
+        # Edges (strict left-then-right child ordering for level-order BFS traversal)
+        # Layer 0 -> Layer 1
+        self.graph.add_edge(n_a.id, n_b.id, 10.0)
+        self.graph.add_edge(n_a.id, n_c.id, 10.0)
+
+        # Layer 1 -> Layer 2
+        self.graph.add_edge(n_b.id, n_d.id, 10.0)
+        self.graph.add_edge(n_b.id, n_e.id, 10.0)
+        self.graph.add_edge(n_c.id, n_f.id, 10.0)
+        self.graph.add_edge(n_c.id, n_g.id, 10.0)
+
+        # Layer 2 -> Layer 3
+        self.graph.add_edge(n_d.id, n_h.id, 10.0)
+        self.graph.add_edge(n_d.id, n_i.id, 10.0)
+        self.graph.add_edge(n_e.id, n_j.id, 10.0)
+        self.graph.add_edge(n_e.id, n_k.id, 10.0)
+        self.graph.add_edge(n_f.id, n_l.id, 10.0)
+        self.graph.add_edge(n_f.id, n_m.id, 10.0)
+        self.graph.add_edge(n_g.id, n_n.id, 10.0)
+        self.graph.add_edge(n_g.id, n_o.id, 10.0)
+
+        self.clear_log()
+        self.append_log("Loaded Preset 5: 4-Layer Binary Tree (15 nodes, Root 'A' to Leaf 'O').")
         self.redraw()
         self.center_graph()
 
