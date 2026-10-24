@@ -57,6 +57,8 @@ def run_dijkstra(graph, start_id, goal_id):
         return None, float('inf'), 0
     if graph.nodes[start_id]['obstacle'] or graph.nodes[goal_id]['obstacle']:
         return None, float('inf'), 0
+    if start_id == goal_id:
+        return [start_id], 0.0, 1
 
     distances = {node: float('inf') for node in graph.nodes}
     distances[start_id] = 0.0
@@ -64,18 +66,19 @@ def run_dijkstra(graph, start_id, goal_id):
     visited = set()
     counter = 0
 
-    # Min-Heap Priority Queue: (dist, tie_breaker, node_id)
-    pq = [(0.0, counter, start_id)]
+    # Min-Heap Priority Queue: (dist, goal_priority, counter, node_id)
+    start_pri = 0 if start_id == goal_id else 1
+    pq = [(0.0, start_pri, counter, start_id)]
     nodes_explored = 0
 
     while pq:
-        dist, _, current = heapq.heappop(pq)
+        dist, _, _, current = heapq.heappop(pq)
         if current in visited:
             continue
         visited.add(current)
         nodes_explored += 1
 
-        if current == goal_id:
+        if current == goal_id or (distances[goal_id] < float('inf') and dist >= distances[goal_id]):
             path = []
             curr = goal_id
             while curr is not None:
@@ -92,7 +95,8 @@ def run_dijkstra(graph, start_id, goal_id):
                 distances[neighbor] = new_dist
                 came_from[neighbor] = current
                 counter += 1
-                heapq.heappush(pq, (new_dist, counter, neighbor))
+                goal_pri = 0 if neighbor == goal_id else 1
+                heapq.heappush(pq, (new_dist, goal_pri, counter, neighbor))
 
     return None, float('inf'), nodes_explored
 

@@ -507,7 +507,7 @@ class TestVisualizerIntegration(unittest.TestCase):
         self.assertIsNotNone(start)
         self.assertIsNotNone(goal)
         self.assertEqual(start.label, "A")
-        self.assertEqual(goal.label, "O")
+        self.assertEqual(goal.label, "H")
 
     def test_preset_binary_tree_bfs_completion(self):
         self.app.load_preset_binary_tree()
@@ -526,7 +526,7 @@ class TestVisualizerIntegration(unittest.TestCase):
         self.assertEqual(self.app.final_path[0], start.id)
         self.assertEqual(self.app.final_path[-1], goal.id)
         path_labels = [self.app.graph.nodes[n].label for n in self.app.final_path]
-        self.assertEqual(path_labels, ["A", "C", "G", "O"])
+        self.assertEqual(path_labels, ["A", "B", "D", "H"])
 
     def test_bfs_no_extra_routes_after_goal(self):
         # On Preset 1, node D discovers goal F. Node E should never be expanded.
@@ -544,6 +544,36 @@ class TestVisualizerIntegration(unittest.TestCase):
         e_nodes = [nid for nid, n in self.app.graph.nodes.items() if n.label == "E"]
         self.assertTrue(len(e_nodes) == 1)
         self.assertNotIn(e_nodes[0], self.app.visited_nodes)
+
+    def test_dijkstra_binary_tree_single_target_pruning(self):
+        # On 4-layer binary tree with Start 'A' and Goal 'H', single-target Dijkstra
+        # must settle Goal 'H' and stop without exploring other leaves (I, J, K, L, M, N, O).
+        self.app.load_preset_binary_tree()
+        self.app.algo_var.set("Dijkstra's Algorithm")
+        self.app.start_visualization()
+
+        steps = 0
+        while self.app.anim_running and steps < 250:
+            self.app.step_execution()
+            steps += 1
+
+        self.assertFalse(self.app.anim_running)
+        path_labels = [self.app.graph.nodes[n].label for n in self.app.final_path]
+        self.assertEqual(path_labels, ["A", "B", "D", "H"])
+        self.assertEqual(self.app.metric_dist, 30.0)
+
+        # 8 nodes visited/expanded
+        self.assertEqual(len(self.app.visited_nodes), 8)
+        for label in ["A", "B", "C", "D", "E", "F", "G", "H"]:
+            n_ids = [nid for nid, n in self.app.graph.nodes.items() if n.label == label]
+            self.assertIn(n_ids[0], self.app.visited_nodes)
+
+        # Other 7 leaves at distance 30.0 should not be visited/popped (they remain in frontier)
+        for label in ["I", "J", "K", "L", "M", "N", "O"]:
+            n_ids = [nid for nid, n in self.app.graph.nodes.items() if n.label == label]
+            self.assertEqual(len(n_ids), 1)
+            self.assertNotIn(n_ids[0], self.app.visited_nodes)
+            self.assertIn(n_ids[0], self.app.frontier_nodes)
 
 
 if __name__ == "__main__":

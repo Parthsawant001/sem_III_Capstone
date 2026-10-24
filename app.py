@@ -232,9 +232,10 @@ def euclidean_distance(graph, u_id, v_id):
 
 def dijkstra_step_generator(graph, start_id, goal_id):
     """
-    Dijkstra's Single-Source Shortest Path Algorithm
+    Dijkstra's Single-Source Shortest Path Algorithm (Single-Target Point-to-Point)
     DSA Structure: Min-Heap Priority Queue (heapq)
     Complexity: Time O((V + E) log V), Space O(V)
+    Single-Target Early Exit: Terminates immediately once the optimal path to Goal is settled.
     """
     distances = {n_id: float('inf') for n_id in graph.nodes}
     distances[start_id] = 0.0
@@ -242,19 +243,31 @@ def dijkstra_step_generator(graph, start_id, goal_id):
     visited = set()
     counter = 0
 
-    # Min-Heap elements: (dist, tie_breaker, node_id)
-    pq = [(0.0, counter, start_id)]
+    # Min-Heap elements: (dist, goal_priority, counter, node_id)
+    # goal_priority: 0 if goal_id else 1 (prioritizes target among identical distances)
+    start_pri = 0 if start_id == goal_id else 1
+    pq = [(0.0, start_pri, counter, start_id)]
     explored_count = 0
     total_steps = 0
 
     start_lbl = graph.nodes[start_id].label
     goal_lbl = graph.nodes[goal_id].label
 
-    yield ("LOG", None, f"[DSA Dijkstra] Starting Single-Source Shortest Path ({start_lbl} -> {goal_lbl})")
+    yield ("LOG", None, f"[DSA Dijkstra] Starting Single-Target Shortest Path ({start_lbl} -> {goal_lbl})")
     yield ("FRONTIER_ADD", (start_id, 0.0, 0.0, [f"({start_lbl}: 0.0)"]), f"[Min-Heap] Pushed Start {start_lbl} with priority 0.0")
 
+    if start_id == goal_id:
+        yield ("LOG", None, f"[DSA Done] Start node is already Goal ({start_lbl})!")
+        yield ("PATH_FOUND", {
+            "path": [start_id],
+            "total_dist": 0.0,
+            "explored_count": 1,
+            "total_steps": 1
+        }, f"[Shortest Path] {start_lbl}")
+        return
+
     while pq:
-        dist, _, current = heapq.heappop(pq)
+        dist, _, _, current = heapq.heappop(pq)
         if current in visited:
             continue
         visited.add(current)
@@ -262,11 +275,14 @@ def dijkstra_step_generator(graph, start_id, goal_id):
         curr_node = graph.nodes[current]
 
         # Snapshot of heap
-        heap_snapshot = [f"({graph.nodes[item[2]].label}: {item[0]:.1f})" for item in sorted(pq)[:5]]
+        heap_snapshot = [f"({graph.nodes[item[3]].label}: {item[0]:.1f})" for item in sorted(pq)[:5]]
+        if len(pq) > 5:
+            heap_snapshot.append(f"+{len(pq)-5} more")
         yield ("VISIT_NODE", (current, dist, heap_snapshot), f"[Min-Heap Pop] Settling node {curr_node.label} (d[{curr_node.label}] = {dist:.1f})")
         total_steps += 1
 
-        if current == goal_id:
+        # Single-target termination: Goal reached or top of min-heap >= distances[goal]
+        if current == goal_id or (distances[goal_id] < float('inf') and dist >= distances[goal_id]):
             path = []
             curr = goal_id
             while curr is not None:
@@ -274,10 +290,11 @@ def dijkstra_step_generator(graph, start_id, goal_id):
                 curr = came_from.get(curr)
             path.reverse()
 
-            yield ("LOG", None, f"[DSA Done] Goal {goal_lbl} reached with optimal distance {dist:.1f}")
+            final_dist = distances[goal_id]
+            yield ("LOG", None, f"[DSA Done] Goal {goal_lbl} reached with optimal distance {final_dist:.1f}")
             yield ("PATH_FOUND", {
                 "path": path,
-                "total_dist": dist,
+                "total_dist": final_dist,
                 "explored_count": explored_count,
                 "total_steps": total_steps
             }, f"[Shortest Path] {' -> '.join(graph.nodes[n].label for n in path)}")
@@ -302,8 +319,11 @@ def dijkstra_step_generator(graph, start_id, goal_id):
                 distances[neighbor] = tentative_dist
                 came_from[neighbor] = current
                 counter += 1
-                heapq.heappush(pq, (tentative_dist, counter, neighbor))
-                heap_snap = [f"({graph.nodes[item[2]].label}: {item[0]:.1f})" for item in sorted(pq)[:5]]
+                goal_pri = 0 if neighbor == goal_id else 1
+                heapq.heappush(pq, (tentative_dist, goal_pri, counter, neighbor))
+                heap_snap = [f"({graph.nodes[item[3]].label}: {item[0]:.1f})" for item in sorted(pq)[:5]]
+                if len(pq) > 5:
+                    heap_snap.append(f"+{len(pq)-5} more")
                 yield ("FRONTIER_ADD", (neighbor, tentative_dist, tentative_dist, heap_snap),
                        f"[Relaxed] d[{n_node.label}]: {old_d} -> {tentative_dist:.1f}. Pushed to Min-Heap.")
 
@@ -3615,14 +3635,14 @@ class PathfindingVisualizerApp:
         n_g = self.graph.add_node(765, 280, label="G")
 
         # Layer 3 (Depth 3 - Leaves)
-        n_h = self.graph.add_node(80, 380, label="H")
+        n_h = self.graph.add_node(80, 380, label="H", is_goal=True)
         n_i = self.graph.add_node(190, 380, label="I")
         n_j = self.graph.add_node(290, 380, label="J")
         n_k = self.graph.add_node(400, 380, label="K")
         n_l = self.graph.add_node(500, 380, label="L")
         n_m = self.graph.add_node(610, 380, label="M")
         n_n = self.graph.add_node(710, 380, label="N")
-        n_o = self.graph.add_node(820, 380, label="O", is_goal=True)
+        n_o = self.graph.add_node(820, 380, label="O")
 
         # Edges (strict left-then-right child ordering for level-order BFS traversal)
         # Layer 0 -> Layer 1
@@ -3646,7 +3666,7 @@ class PathfindingVisualizerApp:
         self.graph.add_edge(n_g.id, n_o.id, 10.0)
 
         self.clear_log()
-        self.append_log("Loaded Preset 5: 4-Layer Binary Tree (15 nodes, Root 'A' to Leaf 'O').")
+        self.append_log("Loaded Preset 5: 4-Layer Binary Tree (15 nodes, Root 'A' to Leaf 'H').")
         self.redraw()
         self.center_graph()
 
